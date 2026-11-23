@@ -1617,36 +1617,59 @@
           v.muted = true;
           v.defaultMuted = true;
           v.playsInline = true;
+          /* Single-file exports (the GitHub Pages copy) embed this video
+             as a data:application/octet-stream URI. Desktop Chrome sniffs
+             the MP4 bytes and plays it anyway, but Chrome on Android
+             refuses a media element whose source declares no media type,
+             so the video never leaves its poster. Re-wrap the same bytes
+             as a video/mp4 Blob URL, which Android Chrome accepts. On the
+             hosted page the src is a plain .mp4 path and this is a no-op. */
+          var blobReady = null;
+          var rawSrc = v.getAttribute('src') || '';
+          if (rawSrc.indexOf('data:') === 0 && window.fetch && window.URL && URL.createObjectURL) {
+            blobReady = fetch(rawSrc).then(function (r) { return r.blob(); }).then(function (b) {
+              v.src = URL.createObjectURL(new Blob([b], { type: 'video/mp4' }));
+              v.load();
+              return true;
+            }).catch(function () { return false; });
+          }
           var frame = v.parentElement;
           var btn = frame ? frame.querySelector('.social-play') : null;
           var inView = false;
           var userPaused = false;
           function showBtn() { if (frame) frame.classList.add('show-play'); }
           function hideBtn() { if (frame) frame.classList.remove('show-play'); }
-          function tryPlay() {
-            if (socialReduceMotion || userPaused || !v.paused) { if (v.paused) showBtn(); return; }
+          function attemptPlay() {
             var p = v.play();
             if (p && p.catch) p.catch(function () { showBtn(); });
           }
+          function tryPlay() {
+            if (socialReduceMotion || userPaused || !v.paused) { if (v.paused) showBtn(); return; }
+            if (blobReady) {
+              blobReady.then(function () { if (!socialReduceMotion && !userPaused && v.paused) attemptPlay(); });
+              return;
+            }
+            attemptPlay();
+          }
+          function playNow() {
+            userPaused = false;
+            if (blobReady) { blobReady.then(attemptPlay); return; }
+            attemptPlay();
+          }
+          v._socialPlay = playNow;
           v.addEventListener('playing', hideBtn);
           v.addEventListener('pause', function () { if (inView) showBtn(); });
           v.addEventListener('canplay', function () { if (inView) tryPlay(); });
           v.addEventListener('click', function () {
             if (v.paused) {
-              userPaused = false;
-              var p = v.play();
-              if (p && p.catch) p.catch(function () { showBtn(); });
+              playNow();
             } else {
               userPaused = true;
               v.pause();
             }
           });
           if (btn) {
-            btn.addEventListener('click', function () {
-              userPaused = false;
-              var p = v.play();
-              if (p && p.catch) p.catch(function () {});
-            });
+            btn.addEventListener('click', function () { playNow(); });
           }
           if ('IntersectionObserver' in window) {
             var socialObserver = new IntersectionObserver(function (entries) {
@@ -1674,8 +1697,8 @@
             window.setTimeout(function () {
               panel.querySelectorAll('.social-video').forEach(function (v) {
                 if (v.paused) {
-                  var p = v.play();
-                  if (p && p.catch) p.catch(function () {});
+                  if (v._socialPlay) v._socialPlay();
+                  else { var p = v.play(); if (p && p.catch) p.catch(function () {}); }
                 }
               });
             }, 60);
